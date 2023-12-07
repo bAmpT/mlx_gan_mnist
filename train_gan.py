@@ -8,59 +8,50 @@ from torchvision.utils import make_grid, save_image
 
 import mlx.core as mx
 import mlx.nn as nn
-from mlx.optimizers import Adam
+#from mlx.optimizers import Adam
 from optimizer import AdamW 
 
 import mnist
 
+
 def leakyrelu(x, neg_slope=0.01): 
     return nn.relu(x) - nn.relu(-neg_slope * x)
 
-def _softmax(x, axis):
-    m = x - mx.max(x, axis=axis, keepdims=True)
-    e = m.exp()
-    return m, e, e.sum(axis=axis, keepdims=True)
-
-def softmax(x, axis=-1):
-    _, e, ss = _softmax(x, axis)
-    return e.div(ss)
-
-def log_softmax(x, axis=-1):
-    m, _, ss = _softmax(x, axis)
-    return m - ss.log()
-
 class Generator(nn.Module):
-    def __init__(self, g_input_dim, g_output_dim, hidden_dim = 256):
+    def __init__(self, g_input_dim: int, g_output_dim: int, hidden_dim: int = 256):
         super().__init__()
-        self.fc1 = nn.Linear(g_input_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, 2*hidden_dim)
-        self.fc3 = nn.Linear(2*hidden_dim, 4*hidden_dim)
-        self.fc4 = nn.Linear(4*hidden_dim, g_output_dim)
 
+        self.layers = [
+            nn.Linear(g_input_dim, hidden_dim),
+            nn.Linear(hidden_dim, 2*hidden_dim),
+            nn.Linear(2*hidden_dim, 4*hidden_dim)
+        ]
+        self.output = nn.Linear(4*hidden_dim, g_output_dim)
+        
     def __call__(self, x) -> Any:
-        x = leakyrelu(self.fc1(x), 0.2)
-        x = leakyrelu(self.fc2(x), 0.2)
-        x = leakyrelu(self.fc3(x), 0.2)
-        x = mx.tanh(self.fc4(x))
+        for layer in self.layers:
+            x = leakyrelu(layer(x), 0.2)
+        x = mx.tanh(self.output(x))
         return x
 
 class Discriminator(nn.Module):
-    def __init__(self, d_input_dim, hidden_dim = 256):
+    def __init__(self, d_input_dim: int, hidden_dim: int = 256):
         super().__init__()
-        self.d1 = nn.Dropout(0.3)
-        self.d2 = nn.Dropout(0.3)
-        self.d3 = nn.Dropout(0.3)
-        self.fc1 = nn.Linear(d_input_dim, 4*hidden_dim)
-        self.fc2 = nn.Linear(4*hidden_dim, 2*hidden_dim)
-        self.fc3 = nn.Linear(2*hidden_dim, hidden_dim)
-        self.fc4 = nn.Linear(hidden_dim, 2)
-    
+        self.layers = [
+            nn.Linear(d_input_dim, 4*hidden_dim), 
+            nn.Linear(4*hidden_dim, 2*hidden_dim), 
+            nn.Linear(2*hidden_dim, hidden_dim)
+        ]
+        self.dropout = nn.Dropout(0.3)
+        self.output = nn.Linear(hidden_dim, 2)
+       
     def __call__(self, x) -> Any:
-        x = self.d1(leakyrelu(self.fc1(x+1.0), 0.2))
-        x = self.d2(leakyrelu(self.fc2(x), 0.2))
-        x = self.d3(leakyrelu(self.fc3(x), 0.2))
-        x = log_softmax(self.fc4(x))
+        x = x + 1.0
+        for layer in self.layers:
+            x = self.dropout(leakyrelu(layer(x), 0.2))
+        x = mx.log(mx.softmax(self.output(x)))
         return x
+
 
 def make_labels(bs, col, val=-2.0):
   y = np.zeros((bs, 2), np.float32)
@@ -115,11 +106,9 @@ def main(args):
 
     loss_and_grad_fn_g = nn.value_and_grad(model_g, loss_fn_g)
     loss_and_grad_fn_d = nn.value_and_grad(model_d, loss_fn_d)
-    optimizer_g = Adam(learning_rate=learning_rate_g, betas=[0.5, 0.999]) 
-    optimizer_d = Adam(learning_rate=learning_rate_d, betas=[0.5, 0.999]) 
-    if args.adamw:
-        optimizer_g = AdamW(learning_rate=learning_rate_g, betas=[0.5, 0.999],weight_decay=0.01)
-        optimizer_d = AdamW(learning_rate=learning_rate_d, betas=[0.5, 0.999], weight_decay=0.01)
+    
+    optimizer_g = AdamW(learning_rate=learning_rate_g, betas=[0.5, 0.999], weight_decay=0.01)
+    optimizer_d = AdamW(learning_rate=learning_rate_d, betas=[0.5, 0.999], weight_decay=0.01)
 
     for e in range(num_epochs):
         tic = time.perf_counter()
@@ -151,7 +140,6 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("Train a simple GAN network on MNIST with MLX.")
     parser.add_argument("--gpu", action="store_true", help="Use the Metal back-end.")
-    parser.add_argument("--adamw", action="store_true", help="Use the AdamW optimizer.")
     args = parser.parse_args()
     if not args.gpu:
         mx.set_default_device(mx.cpu)
